@@ -1,0 +1,11 @@
+parent: "configs/bonn_base.yaml"
+
+frame_start: 0
+frame_step: 0
+frame_num: -1
+
+# dataset params:
+source_path: "/hdd2/bonn/rgbd_bonn_balloon/"
+save_path: "/hdd2/output/dynagslam_results_final/bonn_balloon/no_interp/dynagslam"
+
+#orb_settings_path: "configs/orb_config/tum3.yaml"
