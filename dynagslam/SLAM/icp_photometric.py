@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from SLAM.utils import *
+from dynagslam.SLAM.utils import *
 import matplotlib.pyplot as plt
 import open3d as o3d
 
