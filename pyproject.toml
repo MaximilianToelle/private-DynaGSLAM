@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dynagslam"
+version = "0.1.0"
+description = "DynaGSLAM - Dynamic Gaussian Splatting SLAM"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "torch>=1.13.1",
+    "torchvision>=0.14.1",
+    "torchaudio>=0.13.1",
+    "plyfile",
+    "tqdm",
+    "tensorboard",
+    "torchmetrics",
+    "pytorch_msssim",
+    "trimesh",
+    "scikit-image",
+    "open3d",
+    "pyyaml",
+    "scipy",
+    "opencv-python",
+    "matplotlib",
+    "GPUtil",
+]
+
+[tool.setuptools.packages.find]
+include = ["dynagslam*"]

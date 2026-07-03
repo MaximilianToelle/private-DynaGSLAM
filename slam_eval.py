@@ -1,7 +1,7 @@
 import os
 from argparse import ArgumentParser
 
-from utils.config_utils import read_config
+from dynagslam.utils.config_utils import read_config
 parser = ArgumentParser(description="Training script parameters")
 parser.add_argument("--config", type=str, default="configs/replica/office0.yaml")
 args = parser.parse_args()
@@ -10,15 +10,15 @@ args = read_config(config_path)
 os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(device) for device in args.device_list)
 import torch
 import json
-from utils.camera_utils import loadCam
-from arguments import DatasetParams, MapParams, OptimizationParams
-from scene import Dataset
-from SLAM.multiprocess.mapper_dyna_eval_sam_keti import Mapping
-from SLAM.multiprocess.tracker import Tracker
-from SLAM.utils import *
-from SLAM.eval import eval_frame
-from utils.general_utils import safe_state
-from utils.monitor import Recorder
+from dynagslam.utils.camera_utils import loadCam
+from dynagslam.arguments import DatasetParams, MapParams, OptimizationParams
+from dynagslam.scene import Dataset
+from dynagslam.SLAM.multiprocess.mapper_dyna_eval_sam_keti import Mapping
+from dynagslam.SLAM.multiprocess.tracker import Tracker
+from dynagslam.SLAM.utils import *
+from dynagslam.SLAM.eval import eval_frame
+from dynagslam.utils.general_utils import safe_state
+from dynagslam.utils.monitor import Recorder
 import matplotlib.pyplot as plt
 
 torch.set_printoptions(4, sci_mode=False)
