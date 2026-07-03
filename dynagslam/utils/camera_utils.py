@@ -12,9 +12,9 @@
 import numpy as np
 from PIL import Image
 
-from scene.cameras import Camera
-from utils.general_utils import PILtoTorch
-from utils.graphics_utils import fov2focal
+from dynagslam.scene.cameras import Camera
+from dynagslam.utils.general_utils import PILtoTorch
+from dynagslam.utils.graphics_utils import fov2focal
 
 WARNED = False
 
