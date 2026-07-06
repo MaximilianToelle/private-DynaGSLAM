@@ -1,17 +1,17 @@
 import copy
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-from SLAM.gaussian_pointcloud import *
+from dynagslam.SLAM.gaussian_pointcloud import *
 
 import torch.multiprocessing as mp
-from SLAM.render import Renderer
+from dynagslam.SLAM.render import Renderer
 from collections import defaultdict
 from tqdm import tqdm
 from scipy.spatial.transform import Rotation as R
 
-from SLAM.icp import IcpTracker
+from dynagslam.SLAM.icp import IcpTracker
 from threading import Thread
-from utils.camera_utils import loadCam
+from dynagslam.utils.camera_utils import loadCam
 import pyvista as pv
 
 def convert_poses(trajs):
