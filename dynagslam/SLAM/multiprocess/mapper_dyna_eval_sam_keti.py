@@ -80,7 +80,7 @@ class Mapping(object):
         
         
         # points adding parameters
-        self.uniform_sample_num = 1000000 #100000 #args.uniform_sample_num
+        self.uniform_sample_num = args.uniform_sample_num #1000000
         self.add_depth_thres = args.add_depth_thres
         self.add_normal_thres = args.add_normal_thres
         self.add_color_thres = args.add_color_thres
@@ -267,6 +267,15 @@ class Mapping(object):
                 else:
                     self.local_optimize(frame, optimization_params, dyna_mask, depth_highgrad_mask)
                 self.gaussians_delete(unstable=False)
+        confidence = self.pointcloud.get_confidence
+        print(
+            "confidence:",
+            "min", confidence.min().item(),
+            "mean", confidence.float().mean().item(),
+            "max", confidence.max().item(),
+            "above threshold",
+            (confidence > self.stable_confidence_thres).sum().item(),
+        )
         self.gaussians_fix()
         self.error_gaussians_remove()
         self.gaussians_delete()
@@ -274,12 +283,13 @@ class Mapping(object):
         if self.time>0:
             with torch.no_grad():
                 if self.dyna_sample_mask is not None:
-                    if pts_warp.shape[0]>0: 
-                        #self.interp_extrap(indices_past_continue_fine.squeeze(0).squeeze(-1), mask_past_die, pts_add_map.squeeze(0).squeeze(-1), pts_curr, pts_past, pts_warp, t_past, t_curr, t_pred, dyna_mask_eval)
-                        pass #comment out for interp_extrap
+                    if pts_warp.shape[0]>0:
+                        #THis i the main func of where the dynamic gaussian get the tangent and predict the future position of the dynamic gaussian
+                        self.interp_extrap(indices_past_continue_fine.squeeze(0).squeeze(-1), mask_past_die, pts_add_map.squeeze(0).squeeze(-1), pts_curr, pts_past, pts_warp, t_past, t_curr, t_pred, dyna_mask_eval)
+                    #   pass #comment out for interp_extrap
         move_to_cpu(frame)
         
-
+    #Only chnages i made are removing the .cpu() as they where givning erros
     def interp_extrap(self, indices_past_continue_fine, mask_past_die, pts_add_map, pts_curr, pts_past, pts_warp, t_past, t_curr, t_pred, dyna_mask_eval):
         t_norm = (t_pred-t_past)/(t_curr-t_past)
         
@@ -329,11 +339,11 @@ class Mapping(object):
                 )
             pred_rgb = render_pred['render'] #self.processed_frames[-1].original_image #render_pred['render']
             
-            root_save_dir = "/hdd2/output/dynagslam_results_final/bonn_ps_track/interp_5/frame_%04d"%(self.time)
+            root_save_dir = "/home/fawad/ReplaceGSW/gsplat_policy/test_eval_output/dynagslam_results_final/bonn_ps_track/interp_5/frame_%04d"%(self.time)
             if not os.path.exists(root_save_dir):
                 os.makedirs(root_save_dir)
             gt_image_pred = self.frame_eval.original_image
-            masked_gt_image_pred_dyna = gt_image_pred.permute(1,2,0) + 0.3*dyna_mask_eval[:,:,None]
+            masked_gt_image_pred_dyna = gt_image_pred.permute(1,2,0).cpu() + 0.3 * dyna_mask_eval[:,:,None]
             #plt.imshow(masked_gt_image_pred_dyna)
             #plt.axis("off")
             #plt.show()
@@ -356,18 +366,18 @@ class Mapping(object):
             #plt.show()
             torchvision.utils.save_image(masked_original_image_dyna.permute(2,0,1),os.path.join(root_save_dir, "t1.png"))
 
-            psnr_value = psnr(gt_image_pred, pred_rgb.detach().cpu()).mean()
+            psnr_value = psnr(gt_image_pred, pred_rgb.detach()).mean()
             self.psnr_pred.append(psnr_value)
             print("psnr_pred = ", psnr_value)
             if np.sum(dyna_mask_eval) > 0:
                 gt_image_pred_dyna = (gt_image_pred.view(3,-1)[:, dyna_mask_eval.flatten()]).view(3,-1)
                 pred_rgb_dyna = (pred_rgb.view(3,-1)[:, dyna_mask_eval.flatten()]).view(3,-1)
-                psnr_value_dyna = psnr(gt_image_pred_dyna, pred_rgb_dyna.detach().cpu()).mean()
+                psnr_value_dyna = psnr(gt_image_pred_dyna, pred_rgb_dyna.detach()).mean()
                 self.psnr_pred_dyna.append(psnr_value_dyna)
                 print("psnr_pred_dyna = ", psnr_value_dyna)
             
             
-            image_error = (gt_image_pred - pred_rgb.detach().cpu()).abs()
+            image_error = (gt_image_pred - pred_rgb.detach()).abs()
             
             '''
             # Create a figure with 1 row and 3 columns
@@ -438,9 +448,9 @@ class Mapping(object):
             gt_image_pred = self.frame_eval.original_image
             gt_image_pred_dyna = (gt_image_pred.view(3,-1)[:, dyna_mask_eval.flatten()]).view(3,-1)
             pred_rgb_dyna = (pred_rgb.view(3,-1)[:, dyna_mask_eval.flatten()]).view(3,-1)
-            psnr_value = psnr(gt_image_pred, pred_rgb.detach().cpu()).mean()
+            psnr_value = psnr(gt_image_pred, pred_rgb.detach()).mean()
             self.psnr_pred.append(psnr_value)
-            psnr_value_dyna = psnr(gt_image_pred_dyna, pred_rgb_dyna.detach().cpu()).mean()
+            psnr_value_dyna = psnr(gt_image_pred_dyna, pred_rgb_dyna.detach()).mean()
             self.psnr_pred_dyna.append(psnr_value_dyna)
             
             
@@ -491,9 +501,11 @@ class Mapping(object):
         tangent = end - start
         return end + (t_norm-1) * tangent, tangent
         
-    
+    #As in the legacy mmaper.py file in the gaussian add there are thse filter functions filter + attach, but where removed as i added them back as it was naturall thing to do
     def gaussians_add(self, frame, dyna_mask, depth_highgrad_mask, indices_past_continue, mask_past_die, pts_add_map, pts_curr):
         self.temp_points_init(frame, dyna_mask, depth_highgrad_mask)
+        self.temp_points_filter()
+        self.temp_points_attach(frame)
         self.temp_to_optimize()
         if not torch.sum(dyna_mask.to(torch.int64))==0:
             self.dyna_points_add(dyna_mask, depth_highgrad_mask, indices_past_continue, mask_past_die, pts_add_map, pts_curr)
@@ -521,11 +533,12 @@ class Mapping(object):
             "rotation_raw": self.pointcloud._rotation.detach().clone(),
         }
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
-        
+        # Previously the xyz componenet of l_dyna was not there, but as this is local optim, and we do want both static and dynamic pointcloud to be optimised togeteher, so i have added it
         l_dyna = self.dyna_pointcloud.parametrize_dyna(update_args)
         history_stat_dyna = {
             "opacity": self.dyna_pointcloud._opacity.detach().clone(),
             "confidence": self.dyna_pointcloud.get_confidence.detach().clone(),
+            "xyz": self.dyna_pointcloud._xyz.detach().clone(),
             "features_dc": self.dyna_pointcloud._features_dc.detach().clone(),
             "features_rest": self.dyna_pointcloud._features_rest.detach().clone(),
             "scaling": self.dyna_pointcloud._scaling.detach().clone(),
@@ -559,7 +572,7 @@ class Mapping(object):
                 random_index = random.randint(0, len(self.processed_frames) - 1)
                 if iter > gaussian_update_iter / 2:
                     random_index = -1
-                random_index = len(self.processed_frames) - 1
+              ##random_index = len(self.processed_frames) - 1    #This is also00 percent a mistake and so commented out
                 opt_frame = self.processed_frames[random_index]
                 opt_frame_map = self.processed_map[random_index]
                 opt_render_mask = self.render_masks[random_index]
@@ -692,7 +705,7 @@ class Mapping(object):
             return True
         else:
             return False
-
+    #Made the dyna_mask and depth_highgrad_mask optional as they are not used in the loss_update function. 
     # update confidence by grad
     def loss_update(
         self,
@@ -701,7 +714,8 @@ class Mapping(object):
         init_stat,
         init_stat_dyna,
         update_args,
-        dyna_mask, depth_highgrad_mask,
+        dyna_mask = None,
+        depth_highgrad_mask = None,
         render_mask=None,
         unstable=True,
     ):
@@ -727,22 +741,23 @@ class Mapping(object):
                     init_stat["rotation_raw"][attach_mask],
                 )
             )
-        pointcloud = self.dyna_pointcloud
-        opacity = pointcloud.opacity_activation(init_stat_dyna["opacity"])
+        # ALso 100 percent a mistake as, dyna_pointlcoud does not have any use for increasin in confidence whihc it was being used below, line 819
+        dyna_pointcloud = self.dyna_pointcloud
+        opacity = dyna_pointcloud.opacity_activation(init_stat_dyna["opacity"])
         attach_mask = (opacity < 0.9).squeeze()
         attach_loss_dyna = torch.tensor(0)
         if attach_mask.sum() > 0 and "xyz" in init_stat_dyna:
             attach_loss_dyna = 1000 * (
                 l2_loss(
-                    pointcloud._scaling[attach_mask],
+                    dyna_pointcloud._scaling[attach_mask],
                     init_stat_dyna["scaling"][attach_mask],
                 )
                 + l2_loss(
-                    pointcloud._xyz[attach_mask],
+                    dyna_pointcloud._xyz[attach_mask],
                     init_stat_dyna["xyz"][attach_mask],
                 )
                 + l2_loss(
-                    pointcloud._rotation[attach_mask],
+                    dyna_pointcloud._rotation[attach_mask],
                     init_stat_dyna["rotation_raw"][attach_mask],
                 )
             )
@@ -797,7 +812,8 @@ class Mapping(object):
         (loss + attach_loss + attach_loss_dyna).backward()
         
         self.optimizer.step()
-        self.dyna_optimizer.step()
+        if "xyz" in init_stat_dyna:
+            self.dyna_optimizer.step()
 
         # update confidence by grad
         if pointcloud._features_dc.grad is not None: # when no dyna GS, pointcloud._features_dc.grad is none
@@ -815,7 +831,8 @@ class Mapping(object):
         }
         self.train_report(self.get_total_iter, report_losses)
         self.optimizer.zero_grad(set_to_none=True)
-        self.dyna_optimizer.zero_grad(set_to_none=True)
+        if "xyz" in init_stat_dyna:
+            self.dyna_optimizer.zero_grad(set_to_none=True)
         return loss, report_losses
 
     def evaluate_render_range(
@@ -974,6 +991,17 @@ class Mapping(object):
             l[4]["lr"] *= self.scaling_lr_coef
             l[5]["lr"] *= self.rotation_lr_coef
         is_final = False
+        #Again here even though thge loss update need this info below, it was not computed but need to be, its xyz are comnmented out such that no loss is computed for the dynamic
+        history_stat_dyna = {
+            "opacity": self.dyna_pointcloud._opacity.detach().clone(),
+            "confidence": self.dyna_pointcloud.get_confidence.detach().clone(),
+ ##         "xyz": self.dyna_pointcloud._xyz.detach().clone(),
+            "features_dc": self.dyna_pointcloud._features_dc.detach().clone(),
+            "features_rest": self.dyna_pointcloud._features_rest.detach().clone(),
+            "scaling": self.dyna_pointcloud._scaling.detach().clone(),
+            "rotation": self.dyna_pointcloud.get_rotation.detach().clone(),
+            "rotation_raw": self.dyna_pointcloud._rotation.detach().clone(),
+        }
         init_stat = {
             "opacity": self.stable_pointcloud._opacity.detach().clone(),
             "scaling": self.stable_pointcloud._scaling.detach().clone(),
@@ -1055,6 +1083,7 @@ class Mapping(object):
                     render_ouput,
                     image_input,
                     init_stat,
+                    history_stat_dyna,
                     update_args,
                     render_mask=select_render_mask[random_index],
                     unstable=False,
@@ -1119,6 +1148,8 @@ class Mapping(object):
         # print("===== temp points add =====")
         if self.time == 0:
             depth_range_mask = torch.ones_like(self.frame_map["depth_map"]).to(bool)
+            #As you can tell the code below totally overites the code above, but i think it is necessay as the map map filter unnecessay points and was being used in the legacy mapper.py
+            depth_range_mask = self.frame_map["depth_map"] > 0
             xyz, normal, color, _, _ = sample_pixels(
                 self.frame_map["vertex_map_w"],
                 self.frame_map["normal_map_w"],
@@ -1149,13 +1180,17 @@ class Mapping(object):
                     )
                 )
             if transmission_sample_num > 0:
-                transmission_sample_mask = transmission_sample_mask #& (~(dyna_mask | depth_highgrad_mask).unsqueeze(-1))
+                transmission_sample_mask = transmission_sample_mask & (~(dyna_mask | depth_highgrad_mask).unsqueeze(-1))
                 xyz_trans, normal_trans, color_trans, _, _ = sample_pixels(
                     self.frame_map["vertex_map_w"],
                     self.frame_map["normal_map_w"],
                     self.frame_map["color_map"],
                     transmission_sample_num,
                     transmission_sample_mask,
+                )
+                #Here even though they computed the xyz_trans and such but they never added it to the temp_pointcloud, so i have added it below
+                self.temp_pointcloud.add_empty_points(
+                    xyz_trans, normal_trans, color_trans, self.time
                 )
 
             depth_error = torch.abs(

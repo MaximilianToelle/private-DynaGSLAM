@@ -140,12 +140,14 @@ class Mapping(object):
             move_to_gpu(frame)
             if self.dataset_type == "Scannetpp":
                 self.local_optimize(frame, optimization_params)
+                print("===== global optimize =====+++++===========================================================")
                 if is_keyframe:
                     self.global_optimization(
                         optimization_params,
                         select_keyframe_num=self.global_keyframe_num
                     )
             else:
+                print("===== local optimize =====+++++===========================================================")
                 if not is_keyframe or self.get_stable_num <= 0:
                     movinggs_mask = self.local_optimize(frame, frame_id, semantic, flow_gt, optimization_params)
                 else:

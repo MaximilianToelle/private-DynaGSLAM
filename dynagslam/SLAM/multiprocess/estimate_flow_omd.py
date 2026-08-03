@@ -31,7 +31,7 @@ def writeFlowFile(filename, uv):
         
 def estimate_flow(frame1, frame2, frame_id): #flow estimation vector is from frame2 pointing to frame1
     model = torch.nn.DataParallel(RAFT())
-    model.load_state_dict(torch.load('//home/blark/Desktop/2024/qcomm/dynagslam/SLAM/multiprocess/motion_models/ckpts/raft-things.pth'))
+    model.load_state_dict(torch.load('//home/fawad/ReplaceGSW/gsplat_policy/submodules/DynaGSLAM_official/dynagslam/SLAM/multiprocess/motion_models/raft-things.pth'))
     model = model.module
 
     model.to('cuda')
@@ -48,8 +48,8 @@ def estimate_flow(frame1, frame2, frame_id): #flow estimation vector is from fra
     #save flow
     flo = flow_up[0].permute(1, 2, 0).detach().cpu().numpy()
     flo = flow_viz.flow_to_image(flo)
-    if not os.path.exists('//hdd2/output/omd/swinging_4_unconstrained/flowmap'):
-        os.makedirs('//hdd2/output/omd/swinging_4_unconstrained/flowmap')
+    ##if not os.path.exists('//hdd2/output/omd/swinging_4_unconstrained/flowmap'):
+    ##    os.makedirs('//hdd2/output/omd/swinging_4_unconstrained/flowmap')
     #cv2.imwrite('//hdd2/output/omd/swinging_4_unconstrained/flowmap/%d.png'%(frame_id), flo[:, :, [2, 1, 0]])
 
     

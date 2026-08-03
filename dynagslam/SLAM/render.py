@@ -81,7 +81,7 @@ class Renderer:
             normal_threshold=self.renderer_normal_threshold,
             color_sigma=self.color_sigma,
             prefiltered=False,
-            debug=False,
+            debug=True,
             cx=viewpoint_camera.cx,
             cy=viewpoint_camera.cy,
             T_threshold=0.0001,
@@ -106,6 +106,31 @@ class Renderer:
                     dtype=torch.int32,
                 )
             )
+        
+        with torch.no_grad():
+            visible = self.rasterizer.markVisible(means3D[:, 0, :].contiguous())
+            print(
+                "visible Gaussians:",
+                visible.sum().item(),
+                "/",
+                visible.numel(),
+            )
+
+            xyz_h = torch.cat([
+                means3D[:, 0, :],
+                torch.ones_like(means3D[:, 0, :1]),
+            ], dim=-1)
+
+            xyz_camera = xyz_h @ viewpoint_camera.world_view_transform
+            z = xyz_camera[:, 2]
+
+            print(
+                "camera-space z:",
+                z.min().item(),
+                z.max().item(),
+                "z > 0.2:",
+                (z > 0.2).sum().item(),
+            )
         render_results = self.rasterizer(
             means3D=means3D[:,0,:],
             opacities=opacity,
@@ -116,9 +141,7 @@ class Renderer:
             cov3D_precomp=cov3D_precomp,
             normal_w=normal,
             tile_mask=tile_mask,
-        )
-        
-
+        )        
         rendered_image = render_results[0]
         rendered_depth = render_results[1]
         color_index_map = render_results[2]
