@@ -149,6 +149,7 @@ class Mapping(object):
         depth_gradient_mask = torch.sqrt(depth_x_cropped**2 + depth_y_cropped**2)
         depth_highgrad_mask_temp = depth_gradient_mask > 0.1
         depth_highgrad_mask = torch.ones((depth_highgrad_mask_temp.shape[0]+1, depth_highgrad_mask_temp.shape[1]+1)).bool().to(depth_highgrad_mask_temp.device)
+        ##in the above code, the temp will make sure that the last row and column will be 1 rather than 0,why?
         depth_highgrad_mask[:-1, :-1] = depth_highgrad_mask_temp
         self.depth_highgrad_masks.append(depth_highgrad_mask)
         
@@ -203,17 +204,18 @@ class Mapping(object):
                 plt.imshow(test, cmap='gray')
                 plt.show()'''
 
-                pts_curr = frame_map['vertex_map_w'][grid_curr_masked[:, 0], grid_curr_masked[:, 1], :]
+                pts_curr = frame_map['vertex_map_w'][grid_curr_masked[:, 0], grid_curr_masked[:, 1], :] ## going from pixel to dynamic point in 3D  
                 pts_past = self.dyna_pointcloud._xyz[:, 0, :]
                 K = frame.get_intrinsic.cuda()
                 fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
-                pose_gt = self.processed_frames[-1].get_c2w.cuda()
+                pose_gt = self.processed_frames[-2].get_c2w.cuda()
                 grid_tmp = grid_backward.clone()
-                grid_tmp[:,:,0] = grid_tmp[:,:,0]/((grid_tmp.shape[1]-1)/2)-1
+                grid_tmp[:,:,0] = grid_tmp[:,:,0]/((grid_tmp.shape[1]-1)/2)-1 ##nomalize the grid to [-1, 1] for grid_sample
                 grid_tmp[:,:,1] = grid_tmp[:,:,1]/((grid_tmp.shape[0]-1)/2)-1
                 depth_interp = F.grid_sample(self.processed_map[-2]['depth_map'].permute(2,0,1).unsqueeze(0), grid_tmp.unsqueeze(0), mode='bilinear', align_corners=True).squeeze(0).permute(1,2,0)
                 depth_interp = depth_interp[flow_mask_curr]
-                pts_warp = torch.stack([(grid_backward_masked_float[:, 0]-cx)/fx, (grid_backward_masked_float[:, 1]-cy)/fy, torch.ones((grid_backward_masked_float.shape[0])).cuda()], -1)*depth_interp
+                pts_warp = torch.stack([(grid_backward_masked_float[:, 0]-cx)/fx, (grid_backward_masked_float[:, 1]-cy)/fy, torch.ones((grid_backward_masked_float.shape[0])).cuda()], -1)*depth_interp 
+                #pts_warp[i]; is the predicted previous-frame 3D position corresponding to current dynamic pixel i
                 pts_warp = ((pose_gt @ (torch.cat([pts_warp, torch.ones((pts_warp.shape[0],1)).cuda()], -1)).T).T)[:, :3]
 
                 
@@ -228,12 +230,31 @@ class Mapping(object):
                 
                 
                 nn_dist_mean = torch.mean(nn_dist)
-                pts_add_map = nn_dist>0.001*nn_dist_mean # the more robust of the 2D pixel tracker (flow), the higher scale can be set 
+                pts_add_map = nn_dist>0.05*nn_dist_mean # the more robust of the 2D pixel tracker (flow), the higher scale can be set 
                 add_ratio = pts_add_map.sum()/len(pts_add_map.flatten())
                 self.add_ratio_all.append(add_ratio)
-                pts_add_map = torch.ones_like(pts_add_map).bool()
+  ##            pts_add_map = torch.ones_like(pts_add_map).bool() #makes evey currrent pixel a new dyna
                 mask_past_die = torch.ones((pts_past.shape[0])).bool().cuda()
                 indices_past_continue_fine = indices_past_continue.squeeze(0).squeeze(-1)[~pts_add_map.squeeze(0).squeeze(-1)]
+
+                unique_past_indices, match_counts = torch.unique(
+                    indices_past_continue_fine,
+                    return_counts=True,
+                )
+                duplicated_past_num = (match_counts > 1).sum().item()
+                extra_match_num = torch.clamp(match_counts - 1, min=0).sum().item()
+                max_matches_per_past = (
+                    match_counts.max().item() if match_counts.numel() > 0 else 0
+                )
+                print(
+                    "KNN many-to-one check:",
+                    "accepted matches =", indices_past_continue_fine.numel(),
+                    "unique past Gaussians =", unique_past_indices.numel(),
+                    "past Gaussians matched multiple times =", duplicated_past_num,
+                    "extra duplicate assignments =", extra_match_num,
+                    "max matches to one past Gaussian =", max_matches_per_past,
+                )
+
                 mask_past_die[indices_past_continue_fine] = False
 
                 t_pred = frame_eval.timestamp
@@ -265,7 +286,10 @@ class Mapping(object):
                 if not is_keyframe or self.get_stable_num <= 0:
                     self.local_optimize(frame, optimization_params, dyna_mask, depth_highgrad_mask)
                 else:
-                    self.local_optimize(frame, optimization_params, dyna_mask, depth_highgrad_mask)
+                    self.global_optimization(
+                        optimization_params,
+                        select_keyframe_num=self.global_keyframe_num
+                    )
                 self.gaussians_delete(unstable=False)
         confidence = self.pointcloud.get_confidence
         print(
@@ -302,10 +326,22 @@ class Mapping(object):
             end_coord = self.dyna_pointcloud._xyz[:,0,:].detach().clone()
             start_coord = end_coord.detach().clone()
             
-            if pts_add_map.shape[0] > start_coord.shape[0]:
-                pts_warp = pts_warp[self.select_mask_true_sample_idx]
-                pts_add_map = pts_add_map[self.select_mask_true_sample_idx]
-            start_coord[self.past_new_border_idx:] = pts_warp[pts_add_map]
+    ##      if pts_add_map.shape[0] > start_coord.shape[0]:
+    ##          pts_warp = pts_warp[self.select_mask_true_sample_idx]
+    ##          pts_add_map = pts_add_map[self.select_mask_true_sample_idx]
+    ##      start_coord[self.past_new_border_idx:] = pts_warp[pts_add_map]
+            # First enter the "new points" index space.
+            new_pts_warp = pts_warp[pts_add_map]
+            # These indices are relative to the list of new points.
+            selected_new_idx = self.select_mask_true_sample_idx.to(
+                device=new_pts_warp.device,
+                dtype=torch.long,
+            )
+            sampled_new_pts_warp = new_pts_warp[selected_new_idx]
+            # Number of new Gaussians actually added by sample_pixels().
+            new_gaussian_num = start_coord.shape[0] - self.past_new_border_idx
+            start_coord[self.past_new_border_idx:] = sampled_new_pts_warp
+
             start_coord[:self.past_new_border_idx] = pts_past[~mask_past_die]
             self.dyna_pointcloud_future.copy(self.dyna_pointcloud)
             self.dyna_pointcloud_future.detach()
@@ -420,10 +456,22 @@ class Mapping(object):
             end_coord = self.dyna_pointcloud._xyz[:,0,:].detach().clone()
             start_coord = end_coord.clone().detach().clone()
             
-            if pts_add_map.shape[0] > start_coord.shape[0]:
-                pts_warp = pts_warp[self.select_mask_true_sample_idx]
-                pts_add_map = pts_add_map[self.select_mask_true_sample_idx]
-            start_coord[self.past_new_border_idx:] = pts_warp[pts_add_map]
+            ##      if pts_add_map.shape[0] > start_coord.shape[0]:
+    ##          pts_warp = pts_warp[self.select_mask_true_sample_idx]
+    ##          pts_add_map = pts_add_map[self.select_mask_true_sample_idx]
+    ##      start_coord[self.past_new_border_idx:] = pts_warp[pts_add_map]
+            # First enter the "new points" index space.
+            new_pts_warp = pts_warp[pts_add_map]
+            # These indices are relative to the list of new points.
+            selected_new_idx = self.select_mask_true_sample_idx.to(
+                device=new_pts_warp.device,
+                dtype=torch.long,
+            )
+            sampled_new_pts_warp = new_pts_warp[selected_new_idx]
+            # Number of new Gaussians actually added by sample_pixels().
+            new_gaussian_num = start_coord.shape[0] - self.past_new_border_idx
+            start_coord[self.past_new_border_idx:] = sampled_new_pts_warp
+
             start_coord[:self.past_new_border_idx] = pts_past[~mask_past_die]
             start_coord = start_coord[:, None, :].repeat(1,5,1)
             end_coord = end_coord[:, None, :].repeat(1,5,1)
@@ -636,7 +684,14 @@ class Mapping(object):
             unstable_params["add_tick"] = self.time * devF(
                 torch.ones_like(unstable_params["add_tick"])
             )
-            self.stable_pointcloud.cat(unstable_params)
+            unstable_params["color_error_counter"] = devI(
+            torch.zeros_like(unstable_params["color_error_counter"])
+            )
+            unstable_params["depth_error_counter"] = devI(
+            torch.zeros_like(unstable_params["depth_error_counter"])
+         )
+         ## self.stable_pointcloud.cat(unstable_params)
+            self.pointcloud.cat(unstable_params)
 
     # Remove too small/big gaussians, long time unstable gaussians, insolated_gaussians
     def gaussians_delete(self, unstable=True):
@@ -690,9 +745,10 @@ class Mapping(object):
         curr_trans = frame.T
         _, theta_diff = rot_compare(prev_rot, curr_rot)
         _, l2_diff = trans_compare(prev_trans, curr_trans)
+        frame_gap = frame_id - self.keyframe_ids[-1]
         if self.verbose:
             print("rot diff: {:.2f}, move diff: {:.2f}".format(theta_diff, l2_diff))
-        if theta_diff > self.keyframe_theta_thes or l2_diff > self.keyframe_trans_thes:
+        if theta_diff > self.keyframe_theta_thes or l2_diff > self.keyframe_trans_thes or frame_gap >= 30:
             print("add key frame at frame {:d}!".format(self.time))
             image_input = {
                 "color_map": self.frame_map["color_map"].detach().cpu(),
@@ -1149,7 +1205,7 @@ class Mapping(object):
         if self.time == 0:
             depth_range_mask = torch.ones_like(self.frame_map["depth_map"]).to(bool)
             #As you can tell the code below totally overites the code above, but i think it is necessay as the map map filter unnecessay points and was being used in the legacy mapper.py
-            depth_range_mask = self.frame_map["depth_map"] > 0
+            depth_range_mask = (self.frame_map["depth_map"] > 0) & (~(dyna_mask | depth_highgrad_mask).unsqueeze(-1))
             xyz, normal, color, _, _ = sample_pixels(
                 self.frame_map["vertex_map_w"],
                 self.frame_map["normal_map_w"],
@@ -1210,7 +1266,7 @@ class Mapping(object):
                 & (self.frame_map["depth_map"] > 0)
                 & (self.model_map["render_transmission"] < self.add_transmission_thres)
             )
-            sample_mask = color_sample_mask #| depth_sample_mask
+            sample_mask = color_sample_mask | depth_sample_mask
             sample_mask = sample_mask & (~transmission_sample_mask)
             sample_mask = sample_mask & (~(dyna_mask).unsqueeze(-1))
             sample_num = devI(sample_mask.sum() * self.error_sample_ratio)
