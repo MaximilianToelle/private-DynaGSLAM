@@ -30,6 +30,9 @@ class GaussianPointCloud(object):
     def __init__(self, args) -> None:
         # gaussian optimize parameters
         self._xyz = devF(torch.empty(0))
+        self._object_id = torch.empty(
+            0, dtype=torch.long, device=self._xyz.device
+        )
         self._features_dc = devF(torch.empty(0))
         self._features_rest = devF(torch.empty(0))
         self._scaling = devF(torch.empty(0))
@@ -186,6 +189,14 @@ class GaussianPointCloud(object):
         rots = rots.reshape(xyz.shape[0], -1, 4)
             
         self._xyz = torch.tensor(xyz, dtype=torch.float, device="cuda")
+        vertex = plydata.elements[0]
+        if "object_id" in vertex.data.dtype.names:
+            object_id = np.array(vertex["object_id"], dtype=np.int64, copy=True)
+        else:
+            object_id = np.full(xyz.shape[0], -1, dtype=np.int64)
+        self._object_id = torch.tensor(
+            object_id, dtype=torch.long, device=self._xyz.device
+        )
         self._features_dc = (
             torch.tensor(features_dc, dtype=torch.float, device="cuda")
             .transpose(1, 2)
@@ -213,6 +224,7 @@ class GaussianPointCloud(object):
 
     def delete(self, delte_mask):
         self._xyz = self._xyz[~delte_mask]
+        self._object_id = self._object_id[~delte_mask]
         self._features_dc = self._features_dc[~delte_mask]
         self._features_rest = self._features_rest[~delte_mask]
         self._scaling = self._scaling[~delte_mask]
@@ -226,6 +238,7 @@ class GaussianPointCloud(object):
 
     def remove(self, remove_mask):
         xyz = self._xyz[remove_mask]
+        object_id = self._object_id[remove_mask]
         features_dc = self._features_dc[remove_mask]
         features_rest = self._features_rest[remove_mask]
         scaling = self._scaling[remove_mask]
@@ -239,6 +252,7 @@ class GaussianPointCloud(object):
 
         gaussian_params = {
             "xyz": xyz,
+            "object_id": object_id,
             "features_dc": features_dc,
             "features_rest": features_rest,
             "scaling": scaling,
@@ -255,6 +269,7 @@ class GaussianPointCloud(object):
 
     def copy(self, ref_gs):
         self._xyz = ref_gs._xyz.detach()
+        self._object_id = ref_gs._object_id.detach().clone()
         self._features_dc = ref_gs._features_dc.detach()
         self._features_rest = ref_gs._features_rest.detach()
         self._scaling = ref_gs._scaling.detach()
@@ -354,6 +369,9 @@ class GaussianPointCloud(object):
             self._xyz = torch.cat([self._xyz, temp]) #(50000, 5, 3)
         else: 
             self._xyz = torch.cat([self._xyz, parameters["xyz"]])
+        self._object_id = torch.cat(
+            [self._object_id, parameters["object_id"]]
+        )
         self._features_dc = torch.cat([self._features_dc, parameters["features_dc"]])
         self._features_rest = torch.cat(
             [self._features_rest, parameters["features_rest"]]
@@ -376,7 +394,7 @@ class GaussianPointCloud(object):
             [self._color_error_counter, parameters["color_error_counter"]]
         )
 
-    def add_empty_points(self, xyz, normal, color, time):
+    def add_empty_points(self, xyz, normal, color, time, object_id):
         """
         :param xyz: [N, 3]
         :param normal: [N, 3]
@@ -393,6 +411,10 @@ class GaussianPointCloud(object):
         normal = normal#[valid_normal_mask]
         color = color#[valid_normal_mask]
         points_num = xyz.shape[0]
+        object_id = torch.as_tensor(
+            object_id, dtype=torch.long, device=xyz.device
+        )
+        assert object_id.shape == (points_num,)
         # compute SH feature
         features = devF(torch.zeros((points_num, 3, (self.max_sh_degree + 1) ** 2)))
         sh_color = RGB2SH(color)
@@ -424,6 +446,7 @@ class GaussianPointCloud(object):
 
         add_params = {
             "xyz": xyz,
+            "object_id": object_id,
             "features_dc": features[..., 0:1].transpose(1, 2).contiguous(),
             "features_rest": features[..., 1:].transpose(1, 2).contiguous(),
             "scaling": scales,
@@ -495,6 +518,7 @@ class GaussianPointCloud(object):
                 l.append(f'rot_{t:03}_{i}')
         if include_confidence:
             l.append("confidence")
+        l.append("object_id")
         return l
 
     def save_model_ply(self, path, include_confidence=True):
@@ -538,6 +562,8 @@ class GaussianPointCloud(object):
             attributes = np.concatenate(
                 (xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1
             )
+        object_id = self._object_id.detach().cpu().numpy().reshape(-1, 1)
+        attributes = np.concatenate((attributes, object_id), axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, "vertex")
         PlyData([el]).write(path)
@@ -579,6 +605,10 @@ class GaussianPointCloud(object):
     @property
     def get_xyz(self):
         return self._xyz
+
+    @property
+    def get_object_id(self):
+        return self._object_id
 
     @property
     def get_points_num(self):

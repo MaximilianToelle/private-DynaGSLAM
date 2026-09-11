@@ -256,6 +256,50 @@ class Mapping(object):
                 )
 
                 mask_past_die[indices_past_continue_fine] = False
+                object_id = self.dyna_pointcloud.get_object_id
+                robot_mask = (object_id >= 1) & (object_id <= 16)
+
+                # Project past Gaussian centers into the CURRENT camera.
+                world_to_camera = torch.linalg.inv(frame.get_c2w).to(pts_past)
+                pts_camera = (
+                    pts_past @ world_to_camera[:3, :3].T
+                    + world_to_camera[:3, 3]
+                )
+
+                x, y, z = pts_camera.unbind(dim=-1)
+                z_safe = z.clamp_min(1e-6)
+
+                # fx, fy, cx, cy, height, width are already defined above.
+                u = fx * x / z_safe + cx
+                v = fy * y / z_safe + cy
+
+                inside_view = (
+                    (z > 0)
+                    & (u >= 0) & (u < width)
+                    & (v >= 0) & (v < height)
+                )
+
+                depth_map = frame_map["depth_map"].squeeze(-1).to(pts_past)
+
+                # Sample depth only at valid projected pixels.
+                indices_inside = torch.where(inside_view)[0]
+                u_inside = u[indices_inside].long()
+                v_inside = v[indices_inside].long()
+                depth_observed = depth_map[v_inside, u_inside]
+
+                depth_margin = 0.02  # 2 cm tolerance for depth noise
+                valid_depth = torch.isfinite(depth_observed) & (depth_observed > 0)
+
+                visible = torch.zeros_like(inside_view)
+                visible[indices_inside] = (
+                    valid_depth
+                    & (z[indices_inside] <= depth_observed + depth_margin)
+                )
+
+                mask_past_die &= visible | robot_mask
+
+                # Delete only unmatched Gaussians inside the current view.
+               ## mask_past_die &= inside_view
 
                 t_pred = frame_eval.timestamp
                 pts_add_map_total = torch.zeros_like(flow_mask_curr).bool().cuda().flatten()
@@ -748,7 +792,7 @@ class Mapping(object):
         frame_gap = frame_id - self.keyframe_ids[-1]
         if self.verbose:
             print("rot diff: {:.2f}, move diff: {:.2f}".format(theta_diff, l2_diff))
-        if theta_diff > self.keyframe_theta_thes or l2_diff > self.keyframe_trans_thes or frame_gap >= 30:
+        if theta_diff > self.keyframe_theta_thes or l2_diff > self.keyframe_trans_thes or frame_gap >= 40:
             print("add key frame at frame {:d}!".format(self.time))
             image_input = {
                 "color_map": self.frame_map["color_map"].detach().cpu(),
@@ -1166,7 +1210,12 @@ class Mapping(object):
                 mask,
                 static=False
             )
-            self.dyna_pointcloud.add_empty_points(xyz, normal, color, self.time)
+
+            object_id = self.frame_map["object_id_map"].to(xyz.device)[
+                self.dyna_sample_mask
+            ]
+
+            self.dyna_pointcloud.add_empty_points(xyz, normal, color, self.time, object_id=object_id)
             
             self.dyna_pointcloud.update_geometry(torch.tensor([]).cuda(),
             torch.tensor([]).cuda(),
@@ -1194,7 +1243,10 @@ class Mapping(object):
                 pts_add_map,
                 static=False
             )
-            self.dyna_pointcloud.add_empty_points(xyz, normal, color, self.time)
+            object_id = self.frame_map["object_id_map"].to(xyz.device)[
+                self.dyna_sample_mask
+            ]
+            self.dyna_pointcloud.add_empty_points(xyz, normal, color, self.time, object_id=object_id)
             self.dyna_pointcloud.update_geometry(torch.tensor([]).cuda(),
             torch.tensor([]).cuda(),
             )
@@ -1206,14 +1258,18 @@ class Mapping(object):
             depth_range_mask = torch.ones_like(self.frame_map["depth_map"]).to(bool)
             #As you can tell the code below totally overites the code above, but i think it is necessay as the map map filter unnecessay points and was being used in the legacy mapper.py
             depth_range_mask = (self.frame_map["depth_map"] > 0) & (~(dyna_mask | depth_highgrad_mask).unsqueeze(-1))
-            xyz, normal, color, _, _ = sample_pixels(
+            xyz, normal, color, sampled_mask, _ = sample_pixels(
                 self.frame_map["vertex_map_w"],
                 self.frame_map["normal_map_w"],
                 self.frame_map["color_map"],
                 self.uniform_sample_num,
                 depth_range_mask,
             )
-            self.temp_pointcloud.add_empty_points(xyz, normal, color, self.time)
+            object_id = self.frame_map["object_id_map"].to(xyz.device)[sampled_mask]
+
+            self.temp_pointcloud.add_empty_points(
+                xyz, normal, color, self.time, object_id=object_id
+            )
         else:
             self.get_render_output(frame)
             
@@ -1237,7 +1293,7 @@ class Mapping(object):
                 )
             if transmission_sample_num > 0:
                 transmission_sample_mask = transmission_sample_mask & (~(dyna_mask | depth_highgrad_mask).unsqueeze(-1))
-                xyz_trans, normal_trans, color_trans, _, _ = sample_pixels(
+                xyz_trans, normal_trans, color_trans, sampled_mask, _ = sample_pixels(
                     self.frame_map["vertex_map_w"],
                     self.frame_map["normal_map_w"],
                     self.frame_map["color_map"],
@@ -1245,8 +1301,10 @@ class Mapping(object):
                     transmission_sample_mask,
                 )
                 #Here even though they computed the xyz_trans and such but they never added it to the temp_pointcloud, so i have added it below
+                object_id = self.frame_map["object_id_map"].to(xyz_trans.device)[sampled_mask]
+
                 self.temp_pointcloud.add_empty_points(
-                    xyz_trans, normal_trans, color_trans, self.time
+                    xyz_trans, normal_trans, color_trans, self.time, object_id=object_id
                 )
 
             depth_error = torch.abs(
@@ -1279,15 +1337,16 @@ class Mapping(object):
                     )
                 )
             if sample_num > 0:
-                xyz_error, normal_error, color_error, _, _ = sample_pixels(
+                xyz_error, normal_error, color_error, sampled_mask, _ = sample_pixels(
                 self.frame_map["vertex_map_w"],
                 self.frame_map["normal_map_w"],
                 self.frame_map["color_map"],
                 sample_num,
                 sample_mask,
             )
+                object_id = self.frame_map["object_id_map"].to(xyz_error.device)[sampled_mask]
                 self.temp_pointcloud.add_empty_points(
-                    xyz_error, normal_error, color_error, self.time
+                    xyz_error, normal_error, color_error, self.time, object_id=object_id
                 )
 
     # Remove temp points that fall within the existing unstable Gaussian.
