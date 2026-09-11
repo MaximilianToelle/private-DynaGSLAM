@@ -11,6 +11,10 @@ import matplotlib.pyplot as plt
 from .motion_models.raft import RAFT
 from .motion_models.utils import flow_viz
 
+RAFT_CHECKPOINT = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "motion_models", "raft-things.pth"
+)
+
 
 def writeFlowFile(filename, uv):
     """
@@ -31,7 +35,7 @@ def writeFlowFile(filename, uv):
         
 def estimate_flow(frame1, frame2, frame_id): #flow estimation vector is from frame2 pointing to frame1
     model = torch.nn.DataParallel(RAFT())
-    model.load_state_dict(torch.load('//home/fawad/ReplaceGSW/gsplat_policy/submodules/DynaGSLAM_official/dynagslam/SLAM/multiprocess/motion_models/raft-things.pth'))
+    model.load_state_dict(torch.load(RAFT_CHECKPOINT))
     model = model.module
 
     model.to('cuda')

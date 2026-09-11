@@ -419,7 +419,7 @@ class Mapping(object):
                 )
             pred_rgb = render_pred['render'] #self.processed_frames[-1].original_image #render_pred['render']
             
-            root_save_dir = "/home/fawad/ReplaceGSW/gsplat_policy/test_eval_output/dynagslam_results_final/bonn_ps_track/interp_5/frame_%04d"%(self.time)
+            root_save_dir = os.path.join(self.save_path, "eval_pred", "frame_%04d"%(self.time))
             if not os.path.exists(root_save_dir):
                 os.makedirs(root_save_dir)
             gt_image_pred = self.frame_eval.original_image

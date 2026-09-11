@@ -12,7 +12,6 @@ from scipy.spatial.transform import Rotation as R
 from dynagslam.SLAM.icp import IcpTracker
 from threading import Thread
 from dynagslam.utils.camera_utils import loadCam
-import pyvista as pv
 
 def convert_poses(trajs):
     poses = []
@@ -361,6 +360,8 @@ class Tracker(object):
                     f.write("\n")
 
     def save_traj(self, save_path):
+        import pyvista as pv  # only needed for trajectory plotting
+
         save_traj_path = os.path.join(save_path, "save_traj")
         pose_es = np.stack(self.pose_es, axis=0)
         pose_gt = np.stack(self.pose_gt, axis=0)
