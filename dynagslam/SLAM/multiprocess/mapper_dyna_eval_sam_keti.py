@@ -15,6 +15,7 @@ from dynagslam.SLAM.utils import merge_ply, rot_compare, trans_compare, bbox_fil
 from dynagslam.utils.loss_utils import l1_loss, l2_loss, ssim, psnr
 from cuda_utils._C import accumulate_gaussian_error
 from dynagslam.utils.monitor import Recorder
+from lietorch import SO3, LieGroupParameter
 
 import matplotlib.pyplot as plt
 import open3d as o3d
@@ -39,6 +40,69 @@ def save_flo_file(flow, filename):
         np.array([width, height], dtype=np.int32).tofile(f)  # Width and height
         flow.astype(np.float32).tofile(f)  # Flow data
 
+# Stores the local Gaussians belonging to one object and optimizes its global pose
+class RigidGsplatObject(nn.Module):
+    def __init__(
+        self,
+        object_id: int,
+        means: torch.Tensor,
+        quats: torch.Tensor,
+        scales: torch.Tensor,
+        rgb_colors: torch.Tensor,
+        opacities: torch.Tensor,
+        position_lr: float = 0.001,
+        rotation_lr: float = 0.005,
+        is_background: bool = False,
+    ):
+        super().__init__()
+        self.object_id = object_id
+        self.is_background = is_background
+        initial_position = means.mean(dim=0, keepdim=True)
+        self.super_point_position = nn.Parameter(initial_position)
+        identity_quat_xyzw = torch.tensor(
+            [[0.0, 0.0, 0.0, 1.0]],
+            device=quats.device,
+            dtype=quats.dtype,
+        )
+        # LieTorch’s SO3 uses xyzw
+        self.super_point_rotation = LieGroupParameter(
+            SO3.InitFromVec(identity_quat_xyzw)
+        )
+
+        xyz_local = means - initial_position
+
+        #DynaGSLAM use wxyz
+        rotation_local = quats / quats.norm(dim=-1, keepdim=True)
+
+        self.register_buffer("_xyz", xyz_local.detach())
+        self.register_buffer("_rotation", rotation_local.detach())
+        self.register_buffer("_scaling", scales.detach()) ## scaling + rgb + opacity will be taken out of the buffer and will be trinable
+        self.register_buffer("_rgb", rgb_colors.detach())
+        self.register_buffer("_opacity", opacities.detach())
+
+        if not is_background:
+            self.position_optimizer = torch.optim.RMSprop(
+                [self.super_point_position],
+                lr=position_lr,
+            )
+
+            self.rotation_optimizer = torch.optim.RMSprop(
+                [self.super_point_rotation],
+                lr=rotation_lr,
+            )
+
+#Maintains multiple objects and their mapping to each of its object id
+class RigidGsplatScene(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.objects = nn.ModuleDict()
+
+    def add_object(
+        self,
+        object_id: int,
+        rigid_object: RigidGsplatObject,
+    ):
+        self.objects[str(object_id)] = rigid_object
 
 class Mapping(object):
     def __init__(self, args, recorder=None) -> None:
