@@ -326,14 +326,14 @@ class GaussianPointCloud(object):
         return l
     
     def parametrize_dyna(self, update_args):
-        #self._xyz = nn.Parameter(self._xyz.requires_grad_(True))
+        self._xyz = nn.Parameter(self._xyz.requires_grad_(True))
         self._features_dc = nn.Parameter(self._features_dc.requires_grad_(True))
         self._features_rest = nn.Parameter(self._features_rest.requires_grad_(True))
         self._scaling = nn.Parameter(self._scaling.requires_grad_(True))
         self._rotation = nn.Parameter(self._rotation.requires_grad_(True))
         self._opacity = nn.Parameter(self._opacity.requires_grad_(True))
         l = [
-            #{"params": [self._xyz],"lr": update_args.position_lr, "name": "xyz",},
+            {"params": [self._xyz],"lr": update_args.position_lr, "name": "xyz",},
             {
                 "params": [self._features_dc],
                 "lr": update_args.dyna_feature_lr,
