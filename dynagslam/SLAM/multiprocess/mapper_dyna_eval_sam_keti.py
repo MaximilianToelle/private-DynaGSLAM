@@ -45,11 +45,14 @@ class RigidGsplatObject(nn.Module):
     def __init__(
         self,
         object_id: int,
-        means: torch.Tensor,
-        quats: torch.Tensor,
+        xyz: torch.Tensor,
+        opacity: torch.Tensor,
         scales: torch.Tensor,
-        rgb_colors: torch.Tensor,
-        opacities: torch.Tensor,
+        rotations: torch.Tensor,
+        shs: torch.Tensor,
+        radius: torch.Tensor,
+        normal: torch.Tensor,
+        confidence: torch.Tensor,
         position_lr: float = 0.001,
         rotation_lr: float = 0.005,
         is_background: bool = False,
@@ -57,28 +60,35 @@ class RigidGsplatObject(nn.Module):
         super().__init__()
         self.object_id = object_id
         self.is_background = is_background
-        initial_position = means.mean(dim=0, keepdim=True)
+
+        xyz = xyz[:, 0, :]
+        rotations = rotations[:, 0, :]
+
+        initial_position = xyz.mean(dim=0, keepdim=True)
         self.super_point_position = nn.Parameter(initial_position)
         identity_quat_xyzw = torch.tensor(
             [[0.0, 0.0, 0.0, 1.0]],
-            device=quats.device,
-            dtype=quats.dtype,
+            device=rotations.device,
+            dtype=rotations.dtype,
         )
         # LieTorch’s SO3 uses xyzw
         self.super_point_rotation = LieGroupParameter(
             SO3.InitFromVec(identity_quat_xyzw)
         )
 
-        xyz_local = means - initial_position
+        xyz_local = xyz - initial_position
 
         #DynaGSLAM use wxyz
-        rotation_local = quats / quats.norm(dim=-1, keepdim=True)
+        rotation_local = rotations / rotations.norm(dim=-1, keepdim=True)
 
         self.register_buffer("_xyz", xyz_local.detach())
         self.register_buffer("_rotation", rotation_local.detach())
-        self.register_buffer("_scaling", scales.detach()) ## scaling + rgb + opacity will be taken out of the buffer and will be trinable
-        self.register_buffer("_rgb", rgb_colors.detach())
-        self.register_buffer("_opacity", opacities.detach())
+        self.register_buffer("_opacity", opacity.detach()) ## scales + shs + opacity will be taken out of the buffer and will be trinable
+        self.register_buffer("_scales", scales.detach())
+        self.register_buffer("_shs", shs.detach())
+        self.register_buffer("_radius", radius.detach())
+        self.register_buffer("_normal", normal.detach())
+        self.register_buffer("_confidence", confidence.detach())
 
         if not is_background:
             self.position_optimizer = torch.optim.RMSprop(
@@ -90,7 +100,53 @@ class RigidGsplatObject(nn.Module):
                 [self.super_point_rotation],
                 lr=rotation_lr,
             )
+    @property
+    def world_frame_means(self):
+        rotated_means = self.super_point_rotation * self._xyz
 
+        return rotated_means + self.super_point_position
+
+    @property
+    def world_frame_quats(self):
+        # Convertion
+        local_quats_xyzw = self._rotation[:, [1, 2, 3, 0]]
+        local_rotations = SO3.InitFromVec(local_quats_xyzw)
+
+        world_rotations = (
+            self.super_point_rotation * local_rotations
+        )
+
+        # Convertion
+        world_quats_xyzw = world_rotations.vec()
+        world_quats_wxyz = world_quats_xyzw[:, [3, 0, 1, 2]]
+
+        return world_quats_wxyz
+
+    @property
+    def world_frame_normals(self):
+        return self.super_point_rotation * self._normal
+    
+    @property
+    def world_frame_gaussians(self):
+        world_xyz = self.world_frame_means
+        world_rotations = self.world_frame_quats
+
+        return {
+            "xyz": torch.cat(
+                [world_xyz.unsqueeze(1), world_xyz.new_zeros(world_xyz.shape[0], 4, 3)],
+                dim=1,
+            ),
+            "opacity": self._opacity,
+            "scales": self._scales,
+            "rotations": torch.cat(
+                [world_rotations.unsqueeze(1), world_rotations.new_zeros(world_rotations.shape[0], 1, 4)],
+                dim=1,
+            ),
+            "shs": self._shs,
+            "radius": self._radius,
+            "normal": self.world_frame_normals,
+            "confidence": self._confidence,
+        }
 #Maintains multiple objects and their mapping to each of its object id
 class RigidGsplatScene(nn.Module):
     def __init__(self):
